@@ -1,27 +1,53 @@
+IMAGE_REGISTRY ?= joshgav
+IMAGE_NAME ?= functions-runtime-go-sample
+IMAGE_VERSION ?= latest
+
 plugins = grpc
 target = go
-protoc_location = rpc/
+proto_location = ./proto/
+proto_source = https://raw.githubusercontent.com/Azure/azure-functions-host/dev/src/WebJobs.Script.Grpc/azure-functions-language-worker-protobuf/src/proto/FunctionRpc.proto
 proto_out_dir = rpc/
 
-GOLANG_WORKER_BINARY = golang-worker
-SUBDIRS := $(wildcard sample/*)
+protoc_version = 3.5.1
+protoc_plat = linux
+protoc_arch = x86_64
+protoc_dl_root = https://github.com/google/protobuf/releases/download
+protoc_zip_name = protoc-$(protoc_version)-$(protoc_plat)-$(protoc_arch).zip
 
-.PHONY: rpc
-rpc:
-        protoc -I $(protoc_location) --$(target)_out=plugins=$(plugins):$(proto_out_dir) $(protoc_location)/*.proto
+GOLANG_WORKER_BINARY = go-worker
+SAMPLES := $(wildcard sample/*)
 
-.PHONY: golang-worker
-golang-worker:
+runtime:
+	docker build \
+		--tag "$(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_VERSION)" \
+		--file "./Dockerfile" \
+		.
+
+go-worker: dep
 	GOOS=linux go build -o $(GOLANG_WORKER_BINARY)
 
-.PHONY: dep
 dep:
 	go get -u github.com/golang/dep/... && \
-	dep ensure
+		dep ensure
 
-.PHONY : samples $(SUBDIRS)
-samples : $(SUBDIRS)
+grpc: 
+	mkdir $(proto_location) || true
+	curl -sSL -o $(proto_location)/FunctionRpc.proto $(proto_source)
+	go get -u github.com/golang/protobuf/proto
+	go get -u github.com/golang/protobuf/protoc-gen-go
+	go get -u google.golang.org/grpc
+	curl -sSLO \
+		$(protoc_dl_root)/v$(protoc_version)/$(protoc_zip_name)
+	unzip -q -u $(protoc_zip_name) -d $(proto_location)
+	rm $(protoc_zip_name)
+	./proto/bin/protoc -I $(proto_location) \
+		--$(target)_out=plugins=$(plugins):$(proto_out_dir) \
+		$(proto_location)*.proto
 
-$(SUBDIRS) :
+samples : $(SAMPLES)
+
+$(SAMPLES) :
 	cd $@ && \
-	go build -buildmode=plugin
+		go build -buildmode=plugin
+
+.PHONY: go-worker grpc dep samples $(SAMPLES)
